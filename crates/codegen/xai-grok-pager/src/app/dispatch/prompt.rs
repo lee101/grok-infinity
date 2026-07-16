@@ -1398,6 +1398,30 @@ pub(super) fn handle_prompt_response(
 
         let mut effects = maybe_drain_queue(agent);
 
+        // Infinity modes deliberately use the normal local queue. This keeps
+        // rendering, cancellation, persistence, and leader hand-off identical
+        // to a user-entered follow-up instead of creating a second turn path.
+        if result.is_ok()
+            && !was_cancelling
+            && !was_bash_turn
+            && agent.session.state.is_idle()
+            && agent.session.pending_prompts.is_empty()
+            && agent.shared_queue.is_empty()
+            && let Some(prompt) = crate::app::auto_next::next_prompt(agent)
+        {
+            let id = agent.session.next_queue_id;
+            agent.session.next_queue_id += 1;
+            agent
+                .session
+                .pending_prompts
+                .push_back(crate::app::agent::QueuedPrompt::plain(
+                    id,
+                    prompt,
+                    crate::app::agent::QueueEntryKind::Prompt,
+                ));
+            effects.extend(maybe_drain_queue(agent));
+        }
+
         // Predicted-next-prompt (tab autocomplete): fetch a fresh suggestion
         // (the stale one was wiped above) — but only after a clean, non-bash
         // agent turn that leaves the session idle with an empty prompt and no

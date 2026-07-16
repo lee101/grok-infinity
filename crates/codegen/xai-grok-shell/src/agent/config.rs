@@ -3553,11 +3553,16 @@ pub struct ConfigModelOverride {
     pub api_key: Option<String>,
     /// Env var name(s) for the provider key — string or array in config.toml.
     pub env_key: Option<EnvKeys>,
+    /// Reuse an OpenAI Codex ChatGPT subscription login. Environment
+    /// (`CODEX_ACCESS_TOKEN` + `CHATGPT_ACCOUNT_ID`) wins over file-based
+    /// credentials in `$CODEX_HOME/auth.json` or `~/.codex/auth.json`.
+    pub codex_auth: Option<bool>,
     pub api_base_url: Option<String>,
     pub max_completion_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: Option<ApiBackend>,
+    pub auth_scheme: Option<AuthScheme>,
     #[serde(default)]
     pub extra_headers: IndexMap<String, String>,
     pub context_window: Option<u64>,
@@ -3621,6 +3626,9 @@ impl ConfigModelOverride {
         if let Some(ref v) = self.api_backend {
             entry.info.api_backend = v.clone();
         }
+        if let Some(v) = self.auth_scheme {
+            entry.info.auth_scheme = v;
+        }
         if !self.extra_headers.is_empty() {
             entry.info.extra_headers = self.extra_headers.clone();
         }
@@ -3679,6 +3687,38 @@ impl ConfigModelOverride {
         if self.env_key.is_some() {
             entry.env_key.clone_from(&self.env_key);
         }
+        if self.codex_auth == Some(true) {
+            if self.base_url.is_none() {
+                entry.info.base_url = "https://chatgpt.com/backend-api/codex".to_string();
+                entry.api_base_url = None;
+            }
+            if self.api_backend.is_none() {
+                entry.info.api_backend = ApiBackend::Responses;
+            }
+            if self.agent_type.is_none() {
+                entry.info.agent_type = "codex".to_string();
+            }
+            match load_codex_subscription_credentials() {
+                Some((access_token, account_id)) => {
+                    entry.api_key = Some(access_token);
+                    entry.env_key = None;
+                    entry
+                        .info
+                        .extra_headers
+                        .insert("ChatGPT-Account-ID".to_string(), account_id);
+                    entry
+                        .info
+                        .extra_headers
+                        .entry("originator".to_string())
+                        .or_insert_with(|| "codex_cli_rs".to_string());
+                    entry.info.supported_in_api = true;
+                }
+                None => tracing::warn!(
+                    model = key,
+                    "codex_auth requested but no usable Codex subscription credentials were found"
+                ),
+            }
+        }
         if self.api_base_url.is_some() {
             entry.api_base_url.clone_from(&self.api_base_url);
         }
@@ -3687,6 +3727,37 @@ impl ConfigModelOverride {
         }
         entry
     }
+}
+
+fn load_codex_subscription_credentials() -> Option<(String, String)> {
+    let env_token = std::env::var("CODEX_ACCESS_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let env_account = std::env::var("CHATGPT_ACCOUNT_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if let (Some(token), Some(account)) = (env_token.as_ref(), env_account.as_ref()) {
+        return Some((token.clone(), account.clone()));
+    }
+
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(codex_home.join("auth.json")).ok()?).ok()?;
+    let tokens = value.get("tokens")?;
+    let token = tokens
+        .get("access_token")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let account = env_account.or_else(|| {
+        tokens
+            .get("account_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+    })?;
+    Some((token.to_string(), account))
 }
 /// Shared model metadata — the common fields across all model sources.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -6371,6 +6442,38 @@ reasoning_effort = "low"
         let resolved = resolve_model_list(&cfg, None);
         let model = resolved.get("my-model").expect("model should exist");
         assert!(!model.info.use_concise);
+    }
+    #[test]
+    fn model_override_applies_provider_auth_and_codex_subscription_defaults() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model.anthropic]
+            model = "claude-test"
+            base_url = "https://api.anthropic.com/v1"
+            context_window = 200000
+            api_backend = "messages"
+            auth_scheme = "x_api_key"
+
+            [model.openai-max]
+            model = "gpt-test"
+            context_window = 200000
+            codex_auth = true
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None);
+
+        assert_eq!(resolved["anthropic"].info.auth_scheme, AuthScheme::XApiKey);
+        assert_eq!(
+            resolved["openai-max"].info.api_backend,
+            ApiBackend::Responses
+        );
+        assert_eq!(
+            resolved["openai-max"].info.base_url,
+            "https://chatgpt.com/backend-api/codex"
+        );
+        assert_eq!(resolved["openai-max"].info.agent_type, "codex");
     }
     #[test]
     fn model_info_from_config_propagates_use_concise() {

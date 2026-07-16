@@ -434,6 +434,15 @@ pub struct PagerArgs {
         alias = "dangerously-skip-permissions"
     )]
     pub yolo: bool,
+    /// Continue automatically with the natural next implementation and testing steps.
+    #[arg(long = "auto-next-steps")]
+    pub auto_next_steps: bool,
+    /// Continue automatically by finding and implementing a worthwhile new idea.
+    #[arg(long = "auto-next-idea")]
+    pub auto_next_idea: bool,
+    /// Start a new autonomous goal whenever the current goal completes.
+    #[arg(long = "auto-next-goal")]
+    pub auto_next_goal: bool,
     /// Trust this folder and persist the decision to the trust store.
     #[arg(long = "trust", alias = "trust-folder", hide = true)]
     pub trust: bool,
@@ -1176,5 +1185,19 @@ mod tests {
             panic!("expected agent subcommand");
         };
         assert_eq!(agent.reasoning_effort.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn parses_auto_next_modes() {
+        let args = PagerArgs::try_parse_from([
+            "grok",
+            "--auto-next-steps",
+            "--auto-next-idea",
+            "--auto-next-goal",
+        ])
+        .expect("auto-next flags should parse");
+        assert!(args.auto_next_steps);
+        assert!(args.auto_next_idea);
+        assert!(args.auto_next_goal);
     }
 }

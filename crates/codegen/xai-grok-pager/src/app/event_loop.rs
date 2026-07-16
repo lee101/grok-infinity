@@ -487,6 +487,11 @@ pub(crate) async fn run(
         connection.models,
         connection.available_commands,
     );
+    super::auto_next::configure(
+        args.auto_next_steps,
+        args.auto_next_idea,
+        args.auto_next_goal,
+    );
     app.tracing_rx = Some(tracing_handle.rx);
     // Startup terminal height for the auto-compact derivation; kept fresh by
     // `Event::Resize` from here on. 0 (probe failure) never forces compact.

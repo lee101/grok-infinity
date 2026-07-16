@@ -28,6 +28,11 @@ Protocol (ACP).
 
 **Learn more about Grok Build at [x.ai/cli](https://x.ai/cli)**
 
+**Grok Infinity** extends Grok Build with autonomous continuation modes and
+multi-provider model configuration. Project links:
+[codex-infinity.com](https://codex-infinity.com) · [app.nz](https://app.nz) ·
+[GitHub](https://github.com/lee101/grok-infinity)
+
 This repository contains the Rust source for the `grok` CLI/TUI and its agent
 runtime. It is synced periodically from the SpaceXAI monorepo.
 
@@ -65,6 +70,83 @@ cargo run -p xai-grok-pager-bin              # build + launch the TUI
 cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xai-grok-pager
 cargo check -p xai-grok-pager-bin            # fast validation
 ```
+
+## Infinity modes
+
+Grok Infinity can keep working after a normal turn finishes:
+
+```sh
+grok --auto-next-steps "finish the API migration and verify it"
+grok --auto-next-idea
+grok --auto-next-goal "/goal improve test reliability"
+grok --always-approve --auto-next-steps --auto-next-idea
+```
+
+| Flag | Behavior |
+|------|----------|
+| `--auto-next-steps` | Implements and verifies the most important natural follow-up work after each successful turn |
+| `--auto-next-idea` | Finds and implements a fresh, useful repository improvement after each successful turn |
+| `--auto-next-goal` | Creates a new `/goal` when the current goal reaches `complete` |
+
+These modes intentionally have no turn limit. Normal cancellation, permission,
+sandbox, queue, and goal controls still apply. Combining steps and idea mode
+finishes immediate follow-up work before moving on to a new improvement.
+
+## Models and providers
+
+Grok Infinity retains Grok Build's generic provider configuration. Add entries
+to `~/.grok/config.toml` using any OpenAI-compatible Chat Completions or
+Responses endpoint, an Anthropic Messages endpoint, a local model server, or a
+gateway such as OpenRouter. Credentials can be literal or read from one or more
+environment variables.
+
+```toml
+[model.openai]
+model = "gpt-5.4"
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+api_backend = "responses"
+context_window = 400000
+agent_type = "codex"
+
+[model.anthropic]
+model = "claude-sonnet-4-5"
+name = "Anthropic"
+base_url = "https://api.anthropic.com/v1"
+env_key = "ANTHROPIC_API_KEY"
+api_backend = "messages"
+auth_scheme = "x_api_key"
+context_window = 200000
+
+[model.openrouter]
+model = "openai/gpt-5.4"
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+api_backend = "chat_completions"
+context_window = 400000
+```
+
+For an OpenAI ChatGPT/Codex subscription (including eligible Max-plan access),
+first authenticate with Codex, then opt a model into the shared login:
+
+```sh
+codex login
+```
+
+```toml
+[model.openai-max]
+model = "gpt-5.4"
+name = "OpenAI Max plan"
+codex_auth = true
+context_window = 400000
+```
+
+File-based Codex credentials are discovered from `$CODEX_HOME/auth.json` or
+`~/.codex/auth.json`. For OS-keychain logins and trusted automation, provide
+`CODEX_ACCESS_TOKEN` and `CHATGPT_ACCOUNT_ID`. The token remains sensitive and
+is never printed or copied into Grok's config.
 
 The binary artifact is named `xai-grok-pager`; official installs ship it as
 `grok`. On first launch it opens your browser to authenticate — see the
