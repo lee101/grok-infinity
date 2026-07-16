@@ -1879,8 +1879,60 @@ impl Config {
         config.session_summary_model = model_overrides.session_summary;
         config.image_description_model = model_overrides.image_description;
         config.prompt_suggest_model_pin = model_overrides.prompt_suggestion;
+        let has_explicit_model_default = raw_config
+            .get("models")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|models| models.contains_key("default"));
+        config.apply_ginf_model_defaults(has_explicit_model_default);
         config.apply_env_overrides();
         Ok(config)
+    }
+
+    /// Add ginf's seamless provider defaults without persisting or mutating the
+    /// user's `~/.grok/config.toml`. Explicit CLI/env/config model choices still
+    /// win in `resolve_default_model`.
+    fn apply_ginf_model_defaults(&mut self, has_explicit_model_default: bool) {
+        if super::codex_subscription::is_ready() {
+            self.config_models
+                .entry(super::codex_subscription::MODEL_ID.to_string())
+                .or_insert_with(|| ConfigModelOverride {
+                    model: Some(super::codex_subscription::MODEL_SLUG.to_string()),
+                    name: Some("GPT-5.6 Sol (OpenAI Max)".to_string()),
+                    description: Some(
+                        "GPT-5.6 Sol using the shared Codex ChatGPT subscription".to_string(),
+                    ),
+                    codex_auth: Some(true),
+                    api_backend: Some(ApiBackend::Responses),
+                    context_window: Some(1_050_000),
+                    max_completion_tokens: Some(128_000),
+                    agent_type: Some("codex".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::Medium),
+                    supports_reasoning_effort: Some(true),
+                    supported_in_api: Some(true),
+                    ..Default::default()
+                });
+            if !has_explicit_model_default {
+                self.models.default = Some(super::codex_subscription::MODEL_ID.to_string());
+                self.default_model_override = Some(super::codex_subscription::MODEL_ID.to_string());
+            }
+        } else {
+            self.config_models
+                .entry("grok-4.5".to_string())
+                .or_insert_with(|| ConfigModelOverride {
+                    model: Some("grok-4.5".to_string()),
+                    name: Some("Grok 4.5".to_string()),
+                    description: Some(
+                        "Grok fallback when Codex subscription auth is unavailable".to_string(),
+                    ),
+                    api_backend: Some(ApiBackend::Responses),
+                    context_window: Some(500_000),
+                    ..Default::default()
+                });
+            if !has_explicit_model_default {
+                self.models.default = Some("grok-4.5".to_string());
+                self.default_model_override = Some("grok-4.5".to_string());
+            }
+        }
     }
     /// Populate `#[serde(skip)]` subagent fields from `SubagentsConfig::resolve()`.
     ///
@@ -3698,14 +3750,14 @@ impl ConfigModelOverride {
             if self.agent_type.is_none() {
                 entry.info.agent_type = "codex".to_string();
             }
-            match load_codex_subscription_credentials() {
-                Some((access_token, account_id)) => {
-                    entry.api_key = Some(access_token);
+            match super::codex_subscription::load_credentials() {
+                Some(credentials) => {
+                    entry.api_key = Some(credentials.access_token);
                     entry.env_key = None;
                     entry
                         .info
                         .extra_headers
-                        .insert("ChatGPT-Account-ID".to_string(), account_id);
+                        .insert("ChatGPT-Account-ID".to_string(), credentials.account_id);
                     entry
                         .info
                         .extra_headers
@@ -3729,36 +3781,6 @@ impl ConfigModelOverride {
     }
 }
 
-fn load_codex_subscription_credentials() -> Option<(String, String)> {
-    let env_token = std::env::var("CODEX_ACCESS_TOKEN")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let env_account = std::env::var("CHATGPT_ACCOUNT_ID")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    if let (Some(token), Some(account)) = (env_token.as_ref(), env_account.as_ref()) {
-        return Some((token.clone(), account.clone()));
-    }
-
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(codex_home.join("auth.json")).ok()?).ok()?;
-    let tokens = value.get("tokens")?;
-    let token = tokens
-        .get("access_token")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())?;
-    let account = env_account.or_else(|| {
-        tokens
-            .get("account_id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-    })?;
-    Some((token.to_string(), account))
-}
 /// Shared model metadata — the common fields across all model sources.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
@@ -4679,7 +4701,7 @@ pub fn sampling_config_for_model(
         &credentials.base_url,
     );
     let api_backend = info.api_backend.clone();
-    SamplerConfig {
+    let mut config = SamplerConfig {
         api_key: credentials.api_key,
         model: model_name,
         base_url: credentials.base_url,
@@ -4707,7 +4729,13 @@ pub fn sampling_config_for_model(
         compaction_at_tokens: info.compaction_at_tokens,
         doom_loop_recovery: None,
         header_injector: None,
+    };
+    if config.base_url.trim_end_matches('/')
+        == super::codex_subscription::BASE_URL.trim_end_matches('/')
+    {
+        config.bearer_resolver = Some(super::codex_subscription::bearer_resolver());
     }
+    config
 }
 /// Fold URL-derived headers into `extra_headers`.
 ///

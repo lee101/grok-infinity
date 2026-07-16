@@ -1142,6 +1142,9 @@ impl SamplingClient {
         // it in post-serialize. This is the last surviving piece of the
         // old raw_output machinery.
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
+        if self.base_url.trim_end_matches('/') == "https://chatgpt.com/backend-api/codex" {
+            normalize_codex_responses_body(&mut request_body);
+        }
         let http_request = grok_headers
             .apply(self.post(self.endpoint("responses")))
             .json(&request_body);
@@ -1285,6 +1288,9 @@ impl SamplingClient {
             } else {
                 request_body["tools"] = serde_json::Value::Array(extra_raw_tools);
             }
+        }
+        if self.base_url.trim_end_matches('/') == "https://chatgpt.com/backend-api/codex" {
+            normalize_codex_responses_body(&mut request_body);
         }
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
         // Fresh per attempt so signals never leak across retries; `None`
@@ -2007,6 +2013,53 @@ impl SamplingClient {
     }
 }
 
+/// The ChatGPT Codex Responses endpoint accepts its system prompt through the
+/// top-level `instructions` field and rejects `role: "system"` input items.
+/// Preserve ordering and content while translating only for that endpoint.
+fn normalize_codex_responses_body(body: &mut serde_json::Value) {
+    if let Some(object) = body.as_object_mut() {
+        // The subscription backend uses Codex's narrower Responses contract;
+        // output limits are selected server-side for the entitled model.
+        object.remove("max_output_tokens");
+    }
+    let Some(input) = body
+        .get_mut("input")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    let mut instructions = Vec::new();
+    input.retain(|item| {
+        if item.get("role").and_then(serde_json::Value::as_str) != Some("system") {
+            return true;
+        }
+        if let Some(content) = item.get("content") {
+            if let Some(text) = content.as_str() {
+                instructions.push(text.to_string());
+            } else if let Some(parts) = content.as_array() {
+                instructions.extend(parts.iter().filter_map(|part| {
+                    part.get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                }));
+            }
+        }
+        false
+    });
+    if instructions.is_empty() {
+        return;
+    }
+    let prefix = body
+        .get("instructions")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(prefix) = prefix {
+        instructions.insert(0, prefix);
+    }
+    body["instructions"] = serde_json::Value::String(instructions.join("\n\n"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2043,6 +2096,26 @@ mod tests {
             doom_loop_recovery: None,
             header_injector: None,
         }
+    }
+
+    #[test]
+    fn codex_body_moves_system_input_to_instructions_and_drops_output_limit() {
+        let mut body = serde_json::json!({
+            "model": "gpt-5.6-sol",
+            "instructions": "base",
+            "max_output_tokens": 128000,
+            "input": [
+                {"type": "message", "role": "system", "content": "rules"},
+                {"type": "message", "role": "user", "content": "hello"}
+            ]
+        });
+
+        normalize_codex_responses_body(&mut body);
+
+        assert_eq!(body["instructions"], "base\n\nrules");
+        assert!(body.get("max_output_tokens").is_none());
+        assert_eq!(body["input"].as_array().unwrap().len(), 1);
+        assert_eq!(body["input"][0]["role"], "user");
     }
 
     /// Verify the serialized shape of StreamingChatRequest matches the

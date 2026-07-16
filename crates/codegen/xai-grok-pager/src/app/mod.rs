@@ -1690,9 +1690,9 @@ mod tests {
         assert!(!args.no_alt_screen);
     }
     #[test]
-    fn cli_command_name_is_grok() {
+    fn cli_command_name_is_ginf() {
         use clap::CommandFactory;
-        assert_eq!(PagerArgs::command().get_name(), "grok");
+        assert_eq!(PagerArgs::command().get_name(), "ginf");
     }
     #[test]
     fn cli_help_output_header() {
@@ -1704,7 +1704,7 @@ mod tests {
             vec![
                 "Grok Build TUI",
                 "",
-                "Usage: grok [OPTIONS] [PROMPT] [COMMAND]",
+                "Usage: ginf [OPTIONS] [PROMPT] [COMMAND]",
                 "",
                 "Arguments:",
             ]

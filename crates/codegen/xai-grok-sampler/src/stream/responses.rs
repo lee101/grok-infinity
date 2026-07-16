@@ -120,6 +120,7 @@ pub fn stream_responses<'a>(
         let mut chunk_index: u64 = 0;
         let mut message_chunk_count: u64 = 0;
         let mut first_token_emitted = false;
+        let mut text_acc = String::new();
         let mut reasoning_acc = String::new();
         let mut last_content_chunk_at = Instant::now();
 
@@ -185,6 +186,7 @@ pub fn stream_responses<'a>(
                 ResponseStreamEvent::ResponseOutputTextDelta(text_delta_event) => {
                     let delta = text_delta_event.delta;
                     if !delta.is_empty() {
+                        text_acc.push_str(&delta);
                         if !first_token_emitted {
                             first_token_emitted = true;
                             yield SamplingEvent::FirstToken {
@@ -200,6 +202,12 @@ pub fn stream_responses<'a>(
                             text: delta,
                             chunk_index,
                         };
+                    }
+                }
+
+                ResponseStreamEvent::ResponseOutputTextDone(done_event) => {
+                    if text_acc.is_empty() && !done_event.text.is_empty() {
+                        text_acc.push_str(&done_event.text);
                     }
                 }
 
@@ -463,6 +471,20 @@ pub fn stream_responses<'a>(
         // Splice policy lives in `inject_streaming_reasoning_fallback`.
         let mut items = xai_grok_sampling_types::response_to_conversation_items(response);
         xai_grok_sampling_types::inject_streaming_reasoning_fallback(&mut items, reasoning_acc);
+        let has_assistant_text = items.iter().any(|item| {
+            matches!(item, ConversationItem::Assistant(assistant) if !assistant.content.is_empty())
+        });
+        if !has_assistant_text && !text_acc.is_empty() {
+            if let Some(ConversationItem::Assistant(assistant)) = items
+                .iter_mut()
+                .rev()
+                .find(|item| matches!(item, ConversationItem::Assistant(_)))
+            {
+                assistant.content = text_acc.into();
+            } else {
+                items.push(ConversationItem::assistant(text_acc));
+            }
+        }
 
         let has_tool_calls = items.iter().any(|i| match i {
             ConversationItem::Assistant(a) => !a.tool_calls.is_empty(),
@@ -653,6 +675,10 @@ mod tests {
         match events.last().unwrap() {
             SamplingEvent::Completed { response, .. } => {
                 assert_eq!(response.stop_reason, Some(StopReason::Stop));
+                assert!(matches!(
+                    response.items.as_slice(),
+                    [ConversationItem::Assistant(assistant)] if assistant.content.as_ref() == "hello"
+                ));
             }
             other => panic!("expected Completed, got {other:?}"),
         }

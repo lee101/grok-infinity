@@ -7,7 +7,7 @@
     <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
   </picture>
   <br>
-  Grok Build (<code>grok</code>)
+  Grok Infinity (<code>ginf</code>)
 </h1>
 
 **Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
@@ -33,8 +33,8 @@ multi-provider model configuration. Project links:
 [codex-infinity.com](https://codex-infinity.com) · [app.nz](https://app.nz) ·
 [GitHub](https://github.com/lee101/grok-infinity)
 
-This repository contains the Rust source for the `grok` CLI/TUI and its agent
-runtime. It is synced periodically from the SpaceXAI monorepo.
+This repository contains the Rust source for the `ginf` CLI/TUI and its agent
+runtime. It is synced periodically from the upstream SpaceXAI monorepo.
 
 </div>
 
@@ -42,7 +42,7 @@ runtime. It is synced periodically from the SpaceXAI monorepo.
 
 ## Installing the released binary
 
-Prebuilt binaries are published for macOS, Linux, and Windows:
+The upstream Grok Build binaries are published for macOS, Linux, and Windows:
 
 ```sh
 curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
@@ -67,7 +67,7 @@ Requirements:
 
 ```sh
 cargo run -p xai-grok-pager-bin              # build + launch the TUI
-cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xai-grok-pager
+cargo build -p xai-grok-pager-bin --release  # release binary: target/release/ginf
 cargo check -p xai-grok-pager-bin            # fast validation
 ```
 
@@ -76,10 +76,10 @@ cargo check -p xai-grok-pager-bin            # fast validation
 Grok Infinity can keep working after a normal turn finishes:
 
 ```sh
-grok --auto-next-steps "finish the API migration and verify it"
-grok --auto-next-idea
-grok --auto-next-goal "/goal improve test reliability"
-grok --always-approve --auto-next-steps --auto-next-idea
+ginf --auto-next-steps "finish the API migration and verify it"
+ginf --auto-next-idea
+ginf --auto-next-goal "/goal improve test reliability"
+ginf --always-approve --auto-next-steps --auto-next-idea
 ```
 
 | Flag | Behavior |
@@ -102,12 +102,12 @@ environment variables.
 
 ```toml
 [model.openai]
-model = "gpt-5.4"
+model = "gpt-5.6-sol"
 name = "OpenAI"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 api_backend = "responses"
-context_window = 400000
+context_window = 1050000
 agent_type = "codex"
 
 [model.anthropic]
@@ -120,36 +120,41 @@ auth_scheme = "x_api_key"
 context_window = 200000
 
 [model.openrouter]
-model = "openai/gpt-5.4"
+model = "openai/gpt-5.6-sol"
 name = "OpenRouter"
 base_url = "https://openrouter.ai/api/v1"
 env_key = "OPENROUTER_API_KEY"
 api_backend = "chat_completions"
-context_window = 400000
+context_window = 1050000
 ```
 
-For an OpenAI ChatGPT/Codex subscription (including eligible Max-plan access),
-first authenticate with Codex, then opt a model into the shared login:
+On startup, `ginf` automatically reuses an eligible OpenAI ChatGPT/Codex
+subscription—including Max-plan access—from the existing Codex login:
 
 ```sh
 codex login
 ```
 
-```toml
-[model.openai-max]
-model = "gpt-5.4"
-name = "OpenAI Max plan"
-codex_auth = true
-context_window = 400000
-```
+When the credential is usable, the default is `openai-max`, routed to
+`gpt-5.6-sol` over the Responses API. When no usable subscription credential
+is available, the default is `grok-4.5`. An explicit `--model`,
+`GROK_DEFAULT_MODEL`, or `[models].default` continues to win.
 
-File-based Codex credentials are discovered from `$CODEX_HOME/auth.json` or
-`~/.codex/auth.json`. For OS-keychain logins and trusted automation, provide
+File credentials are read from `$CODEX_HOME/auth.json` or
+`~/.codex/auth.json` on every model request. If the access token is near
+expiry, `ginf` refreshes it during startup and a lightweight background check
+keeps long-running Infinity sessions authenticated. Refreshes are serialized
+between `ginf` processes, and a compare-before-write check prevents overwriting
+credentials rotated concurrently by Codex, Codex Infinity, or another
+compatible client. A rotated refresh token is never reused after another
+client wins the race.
+
+For OS-keychain logins and trusted automation, provide
 `CODEX_ACCESS_TOKEN` and `CHATGPT_ACCOUNT_ID`. The token remains sensitive and
 is never printed or copied into Grok's config.
 
-The binary artifact is named `xai-grok-pager`; official installs ship it as
-`grok`. On first launch it opens your browser to authenticate — see the
+The Grok Infinity binary and command are named `ginf`, so they can coexist with
+the upstream `grok` command. The upstream login flow remains available — see the
 [authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
 
 ## Documentation
@@ -166,7 +171,7 @@ MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 
 | Path | Contents |
 |------|----------|
-| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `xai-grok-pager` binary |
+| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `ginf` binary |
 | `crates/codegen/xai-grok-pager` | The TUI: scrollback, prompt, modals, rendering |
 | `crates/codegen/xai-grok-shell` | Agent runtime + leader/stdio/headless entry points |
 | `crates/codegen/xai-grok-tools` | Tool implementations (terminal, file edit, search, ...) |
